@@ -1,0 +1,102 @@
+name: Status ACK Docker Build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "package.json"
+      - "package-lock.json"
+      - "patches/**"
+      - ".github/workflows/status-ack-docker-build.yml"
+  push:
+    branches:
+      - fix/evolution-baileys-status-ack
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    name: Build and smoke-test patched Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: evolution
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d evolution"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build patched image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: evolution-api:status-ack-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify Baileys status patch in final image
+        run: |
+          docker run --rm --entrypoint sh evolution-api:status-ack-test -c "grep -q 'const handleStatus = async (node) => {' /evolution/node_modules/baileys/lib/Socket/messages-recv.js && grep -q \"ws.on('CB:status'\" /evolution/node_modules/baileys/lib/Socket/messages-recv.js && echo 'Baileys status ACK patch verified in final image'"
+
+      - name: Start image against isolated PostgreSQL
+        run: |
+          docker run -d --name evolution-api --network host \
+            -e DOCKER_ENV=true \
+            -e SERVER_TYPE=http \
+            -e SERVER_PORT=8080 \
+            -e SERVER_URL=http://127.0.0.1:8080 \
+            -e DATABASE_PROVIDER=postgresql \
+            -e DATABASE_CONNECTION_URI='postgresql://postgres:ci-test-password@127.0.0.1:5432/evolution?schema=evolution_api' \
+            -e DATABASE_CONNECTION_CLIENT_NAME=ci-smoke-test \
+            -e AUTHENTICATION_API_KEY=ci-smoke-test-key \
+            -e CACHE_REDIS_ENABLED=false \
+            -e CACHE_LOCAL_ENABLED=true \
+            -e TELEMETRY_ENABLED=false \
+            -e LOG_LEVEL=ERROR,WARN,INFO,LOG \
+            -e LOG_BAILEYS=error \
+            evolution-api:status-ack-test
+
+      - name: Wait for API health endpoint
+        run: |
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8080/; then
+              echo "Evolution API health endpoint returned HTTP 200."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Evolution API did not become healthy. Container logs:"
+          docker logs evolution-api
+          exit 1
+
+      - name: Print container logs on failure
+        if: failure()
+        run: |
+          docker logs evolution-api || true
+
+      - name: Remove test container
+        if: always()
+        run: |
+          docker rm -f evolution-api || true
