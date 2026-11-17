@@ -12,8 +12,10 @@ WORKDIR /evolution
 COPY ./package*.json ./
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
+COPY ./patches ./patches
 
 RUN npm ci --silent
+RUN node ./patches/patch-baileys-status.cjs
 
 COPY ./src ./src
 COPY ./public ./public
