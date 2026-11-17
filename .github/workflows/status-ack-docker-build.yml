@@ -56,6 +56,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Verify Baileys status patch in final image
+        run: |
+          docker run --rm --entrypoint sh evolution-api:status-ack-test -c "grep -q 'const handleStatus = async (node) => {' /evolution/node_modules/baileys/lib/Socket/messages-recv.js && grep -q \"ws.on('CB:status'\" /evolution/node_modules/baileys/lib/Socket/messages-recv.js && echo 'Baileys status ACK patch verified in final image'"
+
       - name: Start image against isolated PostgreSQL
         run: |
           docker run -d --name evolution-api --network host \
