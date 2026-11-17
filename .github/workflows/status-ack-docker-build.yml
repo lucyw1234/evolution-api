@@ -1,0 +1,40 @@
+name: Status ACK Docker Build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "package.json"
+      - "package-lock.json"
+      - "patches/**"
+      - ".github/workflows/status-ack-docker-build.yml"
+  push:
+    branches:
+      - fix/evolution-baileys-status-ack
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    name: Build patched Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: evolution-api:status-ack-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
